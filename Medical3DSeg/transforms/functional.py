@@ -163,7 +163,7 @@ def resized_crop_3d(image, i, j, k, d, h, w, size, interpolation):
     return image
 
 
-def extract_connect_components(binary_mask, minimum_volume=0):
+def extract_connect_compoent(binary_mask, minimum_volume=0):
     """
     从二值化掩膜中提取连通组件。
 
