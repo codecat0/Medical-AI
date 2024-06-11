@@ -5,4 +5,4 @@
 @Author :CodeCat
 @Date   :2024/6/11 14:54
 """
-from .loss_utils import class_weights
+from .loss_utils import class_weights, flatten
