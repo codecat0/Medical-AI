@@ -22,6 +22,20 @@ class CrossEntropyLoss(nn.Module):
             self.weight = None
 
     def forward(self, logit, label):
+        """
+        计算带权重的交叉熵损失。
+
+        Args:
+            logit (torch.Tensor): 网络的输出，shape为(N, C, H, W)或(N, C, D, H, W)。C为类别数。
+            label (torch.Tensor): 真实的标签，shape为(N, H, W)或(N, D, H, W)。
+
+        Returns:
+            torch.Tensor: 计算得到的损失值，shape为(1)。
+
+        Raises:
+            ValueError: 如果权重的数量和类别数不一致时，会抛出此异常。
+
+        """
 
         if len(logit.shape) == 4:
             logit = logit.unsqueeze(0)
