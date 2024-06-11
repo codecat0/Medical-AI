@@ -5,6 +5,7 @@
 @Author :CodeCat
 @Date   :2024/6/11 15:57
 """
+import torch
 import torch.nn as nn
 
 
@@ -32,3 +33,13 @@ class MixedLoss(nn.Module):
                 output, per_channel_dice = output
             loss_list.append(output * self.coef[i])
         return loss_list, per_channel_dice
+
+
+if __name__ == '__main__':
+    inputs = torch.randn(1, 5, 32, 64, 64)
+    targets = torch.randint(0, 5, (1, 32, 64, 64))
+    from Medical3DSeg.models.losses import DiceLoss, CrossEntropyLoss
+    losses = [CrossEntropyLoss(), DiceLoss()]
+    coef = [0.5, 0.5]
+    loss_fn = MixedLoss(losses, coef)
+    print(loss_fn(inputs, targets))
