@@ -6,11 +6,12 @@
 @Date   :2024/6/11 9:46
 """
 import os
-import numpy as np
 import SimpleITK as sitk
 
 from torch.utils.data import Dataset
 from Medical3DSeg.transforms.transform import Compose
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 
 class MedicalDataset(Dataset):
@@ -40,19 +41,17 @@ class MedicalDataset(Dataset):
 
     def __init__(self,
                  dataset_root,
-                 result_dir,
                  transforms,
                  num_classes,
                  mode='train',
                  ignore_index=255,
                  dataset_json_path='',
-                 repeat_times=10,
+                 repeat_times=1,
                  win_center=40,
                  win_width=100,
                  depth=16):
         super(MedicalDataset, self).__init__()
         self.dataset_root = dataset_root
-        self.result_dir = result_dir
         self.transforms = Compose(transforms)
         self.file_list = list()
         self.mode = mode.lower()
@@ -79,7 +78,7 @@ class MedicalDataset(Dataset):
 
         with open(file_path, 'r') as f:
             for line in f.readlines():
-                items = line.strip().split()
+                items = line.strip().split('\t')
                 if len(items) != 2:
                     raise Exception("File list format incorrect! It should be"
                                     " image_name lable_name\\n")
@@ -140,7 +139,7 @@ class MedicalDataset(Dataset):
         intensityWindowing.SetOutputMaximum(max_num)
         intensityWindowing.SetOutputMinimum(min_num)
 
-        sitkImage = resampleSize(sitkImage, depth)
+        # sitkImage = resampleSize(sitkImage, depth)
         sitkImage = intensityWindowing.Execute(sitkImage)
         data = sitk.GetArrayFromImage(sitkImage)
         return data
@@ -198,3 +197,24 @@ def resampleSize(sitkImage, depth):
     sitkImage = sitk.Resample(
         sitkImage, new_size, euler3d, sitk.sitkNearestNeighbor, origin, new_space, directions)
     return sitkImage
+
+
+if __name__ == '__main__':
+    dataset_root = 'data/BHSD'
+    from Medical3DSeg.transforms import transform as T
+
+    transforms = [
+        T.RandomFlip3D(flip_axis=1),
+        T.RandomRotation3D(degrees=10),
+    ]
+    dataset = MedicalDataset(
+        dataset_root=dataset_root,
+        transforms=transforms,
+        num_classes=5,
+    )
+    for i in range(len(dataset)):
+        img, label = dataset[i]
+        print(img.shape, label.shape)
+        print(type(img), type(label))
+        break
+    print(len(dataset))

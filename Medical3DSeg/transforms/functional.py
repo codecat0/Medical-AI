@@ -14,7 +14,7 @@ import numpy as np
 import scipy
 import scipy.ndimage
 import SimpleITK as sitk
-from scipy.ndimage.filters import gaussian_filter, gaussian_gradient_filter
+from scipy.ndimage.filters import gaussian_filter
 from skimage.transform import resize
 
 
