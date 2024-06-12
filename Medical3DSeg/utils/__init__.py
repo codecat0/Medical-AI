@@ -8,3 +8,4 @@
 from . import logger
 from .timer import TimeAverager, calculate_eta
 from .utils import resume
+from .metrics import mean_iou, accuracy, kappa, calculate_area

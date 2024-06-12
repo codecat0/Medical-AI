@@ -38,13 +38,13 @@ def calculate_area(pred, label, num_classes, ignore_index=255):
         label_area.append(label_area_i)
         intersect_area.append(intersect_area_i)
 
-    pred_area = torch.cat(pred_area, dim=0)
-    label_area = torch.cat(label_area, dim=0)
-    intersect_area = torch.cat(intersect_area, dim=0)
+    pred_area = torch.stack(pred_area)
+    label_area = torch.stack(label_area)
+    intersect_area = torch.stack(intersect_area)
     return intersect_area, pred_area, label_area
 
 
-def main_iou(intersect_area, pred_area, label_area):
+def mean_iou(intersect_area, pred_area, label_area):
     intersect_area = intersect_area.numpy()
     pred_area = pred_area.numpy()
     laebl_area = label_area.numpy()
@@ -86,3 +86,12 @@ def kappa(intersect_area, pred_area, label_area):
     pe = np.sum(pred_area * label_area) / (total_area * total_area)
     kappa_coef = (po - pe) / (1 - pe)
     return kappa_coef
+
+
+if __name__ == '__main__':
+    pred = torch.randint(0, 5, (1, 16, 256, 256))
+    label = torch.randint(0, 5, (1, 16, 256, 256))
+    intersect_area, pred_area, label_area = calculate_area(pred, label, 6)
+    print(mean_iou(intersect_area, pred_area, label_area))
+    print(accuracy(intersect_area, pred_area))
+    print(kappa(intersect_area, pred_area, label_area))
