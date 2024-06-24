@@ -9,28 +9,12 @@ import os
 import time
 import shutil
 from collections import deque
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from Medical3DSeg.utils import logger, TimeAverager, calculate_eta, resume
-
-
-def check_logits_losses(logits_list, losses):
-    len_logits = len(logits_list)
-    len_losses = len(losses['types'])
-
-    if len_logits != len_losses:
-        raise ValueError(f'The number of logits {len_logits} is not equal to the number of losses {len_losses}')
-
-
-def loss_computation(logits_list, labels, losses):
-    check_logits_losses(logits_list, losses)
-    loss_list = []
-    for i in range(len(logits_list)):
-        logits = logits_list[i]
-        loss_i = losses['types'][i]
-        loss_list.append(losses['coef'][i] * loss_i(logits, labels))
-    return loss_list
+from Medical3DSeg.utils import logger, TimeAverager, calculate_eta, resume, loss_computation
+from Medical3DSeg.core import val
 
 
 def train(
@@ -47,8 +31,8 @@ def train(
         num_workers=0,
         use_vdl=False,
         losses=None,
+        sw_num=None,
         keep_checkpoint_max=5,
-        test_config=None,
         fp16=False,
 ):
     model.train()
@@ -78,11 +62,15 @@ def train(
     if use_vdl:
         from torch.utils.tensorboard import SummaryWriter
         log_writer = SummaryWriter(save_dir)
+    else:
+        log_writer = None
 
     avg_loss = 0.0
     avg_loss_list = []
+    mdice = 0.0
+    channel_dice_array = np.array([])
     iters_per_epoch = len(loader)
-    best_mean_iou = -1.0
+    best_mean_dice = -1.0
     best_model_iter = -1
     reader_cost_averager = TimeAverager()
     batch_cost_averager = TimeAverager()
@@ -101,16 +89,16 @@ def train(
 
             if fp16:
                 with torch.cuda.amp.autocast(enabled=True):
-                    logits_list = model(images)
-                    loss_list = loss_computation(logits_list, labels, losses)
+                    logits = model(images)
+                    loss_list, per_channel_dice = loss_computation(logits, labels, losses)
                     loss = sum(loss_list)
 
                 scaled = scaler.scale(loss)
                 scaled.backward()
                 scaler.step(optimizer)
             else:
-                logits_list = model(images)
-                loss_list = loss_computation(logits_list, labels, losses)
+                logits = model(images)
+                loss_list, per_channel_dice = loss_computation(logits, labels, losses)
                 loss = sum(loss_list)
                 optimizer.zero_grad()
                 loss.backward()
@@ -120,23 +108,37 @@ def train(
             lr = optimizer.param_groups[0]['lr']
             # lr_scheduler.step()
 
-            avg_loss += loss.numpy()[0]
-            if not avg_loss_list:
+            avg_loss += float(loss)
+            mdice += np.mean(per_channel_dice) * 100
+
+            if channel_dice_array.size == 0:
+                channel_dice_array = per_channel_dice
+            else:
+                channel_dice_array += per_channel_dice
+
+            if len(avg_loss_list) == 0:
                 avg_loss_list.append(l.numpy() for l in loss_list)
+            else:
+                for i, l in enumerate(loss_list):
+                    avg_loss_list[i] += l.numpy()
+
             batch_cost_averager.record(time.time() - batch_start, num_samples=batch_size)
 
             if iter % log_iters == 0:
                 avg_loss /= log_iters
-                avg_loss_list = [l[0] / log_iters for l in avg_loss_list]
+                avg_loss_list = [l.item() / log_iters for l in avg_loss_list]
+                mdice /= log_iters
+                channel_dice_array /= log_iters
+
                 remain_iters = iters - iter
                 avg_train_batch_cost = batch_cost_averager.get_average()
                 avg_train_reader_cost = reader_cost_averager.get_average()
                 eta = calculate_eta(remain_iters, avg_train_batch_cost)
                 logger.info(
-                    "[TRAIN] epoch {}, iter {}/{}, loss: {:.4f}, lr: {:.6f}, batch_cost: {:.4f}, reader_cost: {:.5f}" 
+                    "[TRAIN] epoch {}, iter {}/{}, loss: {:.4f}, DSC: {:.4f}, lr: {:.6f}, batch_cost: {:.4f}, reader_cost: {:.5f}"
                     "ips: {:.4f}, samples/sec | ETA {}".format(
                         (iter - 1) // iters_per_epoch + 1, iter, iters,
-                        avg_loss, lr, avg_train_batch_cost,
+                        avg_loss, mdice, lr, avg_train_batch_cost,
                         avg_train_reader_cost,
                         batch_cost_averager.get_ips_average(), eta
                     )
@@ -145,30 +147,32 @@ def train(
                 if use_vdl:
                     log_writer.add_scalar('Train/loss', avg_loss, iter)
                     if len(avg_loss_list) > 1:
-                        avg_loss_dict = {}
-                        for i, value in enumerate(avg_loss_list):
-                            avg_loss_dict['loss_' + str(i)] = value
-                        for key, value in avg_loss_dict.items():
-                            log_tag = 'Train/' + key
-                            log_writer.add_scalar(log_tag, value, iter)
+                        for i, loss in enumerate(avg_loss_list):
+                            log_writer.add_scalar('Train/loss_{}'.format(i), loss, iter)
 
+                    log_writer.add_scalar('Train/DSC', mdice, iter)
                     log_writer.add_scalar('Train/lr', lr, iter)
                     log_writer.add_scalar('Train/batch_cost', avg_train_batch_cost, iter)
                     log_writer.add_scalar('Train/reader_cost', avg_train_reader_cost, iter)
 
                 avg_loss = 0.0
                 avg_loss_list = []
+                mdice = 0.0
+                channel_dice_array = np.array([])
                 reader_cost_averager.reset()
                 batch_cost_averager.reset()
 
             if (iter % save_interval == 0 or iter == iters) and (val_dataset is not None):
                 num_workers = 1 if num_workers > 0 else 0
 
-                if test_config is None:
-                    test_config = {}
-
-                # TODO: evaluate on validation set
-
+                result_dict = val.evaluate(
+                    model,
+                    val_dataset,
+                    losses,
+                    num_workers=num_workers,
+                    print_details=True,
+                    sw_num=sw_num
+                )
                 model.train()
 
             if iter % save_interval == 0 or iter == iters:
@@ -184,8 +188,28 @@ def train(
                     shutil.rmtree(model_to_remove)
 
                 if val_dataset is not None:
-                    # TODO: validate the dataset
-                    pass
+                    if result_dict['mdice'] > best_mean_dice:
+                        best_mean_dice = result_dict['mdice']
+                        best_model_iter = iter
+                        best_model_dir = os.path.join(save_dir, 'best_model')
+                        torch.save(
+                            model.state_dict(),
+                            os.path.join(best_model_dir, 'model.pt')
+                        )
+                        logger.info(
+                            '[EVAL] The model with the best validation mDice ({:.4f}) was saved at iter {}.'
+                            .format(best_mean_dice, best_model_iter)
+
+                        )
+
+                        if use_vdl:
+                            log_writer.add_scalar('Evaluate/mDice', best_mean_dice, iter)
+                            if 'miou' in result_dict:
+                                log_writer.add_scalar('Evaluate/miou', result_dict['miou'], iter)
+                            if 'acc' in result_dict:
+                                log_writer.add_scalar('Evaluate/acc', result_dict['acc'], iter)
+                            if 'kappa' in result_dict:
+                                log_writer.add_scalar('Evaluate/kappa', result_dict['kappa'], iter)
 
             batch_start = time.time()
 
