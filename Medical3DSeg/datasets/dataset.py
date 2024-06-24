@@ -20,7 +20,6 @@ class MedicalDataset(Dataset):
 
     Args:
         dataset_root (str): 数据集的根目录。
-        result_dir (str): 存放结果的目录。
         transforms (list): 数据预处理流程。
         num_classes (int): 类别数。
         mode (str, optional): 数据集模式，可选值为 'train', 'val', 'test'，默认为 'train'。
